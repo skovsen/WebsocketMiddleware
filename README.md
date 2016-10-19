@@ -2,7 +2,7 @@
 
 # Organicity Orion Context Broker Middleware
 Java Spring.io library to handle connections between the REST based notifications used by the context broker (https://fiware-orion.readthedocs.io/en/master/user/walkthrough_apiv2/index.html#introduction) and Websockets.
-It has been intended to be used in conjection with our Java and Processing Websocket Client library (link)
+It has been intended to be used in conjection with our Java and Processing Websocket Client library (https://github.com/skovsen/WebsocketClient)
 
 
 ## Dependencies
