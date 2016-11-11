@@ -22,4 +22,5 @@ This middleware requires an public IP adress where the Context Broker can send u
 
 This is a Spring MVC application, using Spring Boot, which means that normal conventions are used for defining endpoints
     
-
+# Note
+This software is still under test and is expected operational by January 2017
