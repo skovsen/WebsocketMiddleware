@@ -79,7 +79,6 @@ public class OrionController {
 
         OutOfBandMessage message = new OutOfBandMessage();
         try{
-        	System.out.println(subscriptionId);
         	Integer.parseInt(subscriptionId);
         	message.setType("subscriptionId");
         	message.setMessage(subscriptionId);
