@@ -51,19 +51,6 @@ public class Connector {
 
     
     
-    public static void main(String[] args){
-    	Connector c = new Connector();
-    	String[] attr = new String[1];
-    	attr[0] = "temperature";
-    	String[] cond = new String[1];
-    	cond[0] = "pressure";
-		
-    	OrionSubscription subscription = new OrionSubscription(cond, attr, "P1D", "Room1", false, "Room",null);
-    	
-    	
-    	c.registerSubscription(subscription, "XXX");
-    }
-    
     /**
 	 * Initiates the connection to the Context Broker
 	 * 
