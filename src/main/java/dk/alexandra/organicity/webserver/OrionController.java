@@ -78,13 +78,16 @@ public class OrionController {
         String subscriptionId = connector.registerSubscription(subscription, sessionId);
 
         OutOfBandMessage message = new OutOfBandMessage();
-        if(subscriptionId==null){
-        	message.setType("error");
-        	message.setMessage("Subscription not added "+subscription.getId());
-        }else{
+        try{
+        	System.out.println(subscriptionId);
+        	Integer.parseInt(subscriptionId);
         	message.setType("subscriptionId");
         	message.setMessage(subscriptionId);
+        }catch(NumberFormatException e){
+        	message.setType("error");
+        	message.setMessage(subscriptionId+": "+subscription.getId());
         }
+        System.out.println(message.getMessage());
         messagingTemplate.convertAndSendToUser(sessionId,"/message/queue/orion", message, createHeaders(sessionId));
     }
     
