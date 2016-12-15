@@ -9,7 +9,17 @@ import java.util.List;
 import java.util.Properties;
 import java.util.TimeZone;
 
+import javax.ws.rs.client.Client;
+import javax.ws.rs.client.ClientBuilder;
+import javax.ws.rs.client.Invocation;
+import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+
 import org.apache.log4j.Logger;
+import org.glassfish.jersey.client.ClientConfig;
+import org.glassfish.jersey.filter.LoggingFilter;
+import org.json.JSONObject;
 
 import com.amaxilatis.orion.OrionClient;
 import com.amaxilatis.orion.model.subscribe.OrionEntity;
@@ -29,7 +39,6 @@ import dk.alexandra.orion.websocket.transports.OrionSubscription;
  */
 public class Connector {
 	
-	
 	protected static final Logger LOGGER = Logger.getLogger(Connector.class);
 	
     private OrionClient client;
@@ -38,8 +47,22 @@ public class Connector {
     private String localURI;
     private HashMap<String, OrionSubscription> subscriptions = new HashMap<>();
     private HashMap<String, ArrayList<String>> clientIndexedSubscriptions = new HashMap<>();
+    private String serverUrl;
 
     
+    
+    public static void main(String[] args){
+    	Connector c = new Connector();
+    	String[] attr = new String[1];
+    	attr[0] = "temperature";
+    	String[] cond = new String[1];
+    	cond[0] = "pressure";
+		
+    	OrionSubscription subscription = new OrionSubscription(cond, attr, "P1D", "Room1", false, "Room",null);
+    	
+    	
+    	c.registerSubscription(subscription, "XXX");
+    }
     
     /**
 	 * Initiates the connection to the Context Broker
@@ -50,7 +73,7 @@ public class Connector {
         df = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm'Z'");
         df.setTimeZone(tz);
         
-        String serverUrl = "http://192.168.121.132";
+        serverUrl = "http://192.168.121.132:1026";
         String token = "";
         localURI = "http://192.168.121.1:8080/receiveNotifications";
         try{
@@ -82,6 +105,25 @@ public class Connector {
 	public String registerSubscription(OrionSubscription subscription, String clientId){
 		String subscriptionId = null;
 		
+		//using clean java http client, as OrionClient is non functioning with simple get
+		Client c = ClientBuilder.newClient( new ClientConfig().register( LoggingFilter.class ) );
+		WebTarget webTarget = c.target(serverUrl).path("/v2/entities/"+subscription.getId());
+		Invocation.Builder invocationBuilder =  webTarget.request(MediaType.APPLICATION_JSON);
+		Response checkResponse = invocationBuilder.get();
+		JSONObject entity = new JSONObject(checkResponse.readEntity(String.class));
+
+		if(entity.has("error")){
+			//entity does not exist
+			subscriptionId = "Sorry, entity not available"; 
+		}else if(entity.has("access:scope") && ((JSONObject)(entity.get("access:scope"))).has("value") && ((JSONObject)(entity.get("access:scope"))).get("value").equals("private")){
+			subscriptionId = "Sorry, entity not available";
+		}
+		
+		
+		if(subscriptionId!=null)
+			return subscriptionId;
+		
+		
 		OrionEntity entitty = new OrionEntity();
 		entitty.setId(subscription.getId());
 		entitty.setIsPattern(String.valueOf(subscription.isPattern()));
@@ -104,10 +146,12 @@ public class Connector {
 					}
 				}
 			}
+			subscriptionId = "Not able to subscribe at the moment. Please try again";
 		}catch(IOException e){
 			LOGGER.error("Not able to add subscription: "+e.getStackTrace());
-			
+			subscriptionId = "Something went wrong when trying to subscribe. Please try again";
 		}
+		
 		return subscriptionId;
 	}
 	
@@ -176,6 +220,11 @@ public class Connector {
 	 */
 	public boolean clientDisconnected(String clientId){
 		ArrayList<String> clientSubscriptions = clientIndexedSubscriptions.get(clientId);
+		if(clientSubscriptions==null){
+			//no subscriptions found. all good
+			return true;
+		}
+		
 		List<String> subscriptions = (ArrayList)clientSubscriptions.clone();
 		
 		boolean allGood = true;
