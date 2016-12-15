@@ -51,6 +51,8 @@ public class Connector {
 
     
     
+    
+    
     /**
 	 * Initiates the connection to the Context Broker
 	 * 
@@ -74,7 +76,7 @@ public class Connector {
         	LOGGER.error("not able to use properties. Continuing with default values");
         	
         }
-        
+        LOGGER.error("Connecting to url: "+serverUrl);
         client = new OrionClient(serverUrl,token, "organicity", "/");
         
         
@@ -95,15 +97,19 @@ public class Connector {
 		//using clean java http client, as OrionClient is non functioning with simple get
 		Client c = ClientBuilder.newClient( new ClientConfig().register( LoggingFilter.class ) );
 		WebTarget webTarget = c.target(serverUrl).path("/v2/entities/"+subscription.getId());
-		Invocation.Builder invocationBuilder =  webTarget.request(MediaType.APPLICATION_JSON);
+		
+		Invocation.Builder invocationBuilder =  webTarget.request(MediaType.APPLICATION_JSON).header("fiware-service", "organicity");
 		Response checkResponse = invocationBuilder.get();
+		
 		JSONObject entity = new JSONObject(checkResponse.readEntity(String.class));
 
 		if(entity.has("error")){
 			//entity does not exist
 			subscriptionId = "Sorry, entity not available"; 
+			LOGGER.info("Client tried to access unknown entity: "+subscription.getId());
 		}else if(entity.has("access:scope") && ((JSONObject)(entity.get("access:scope"))).has("value") && ((JSONObject)(entity.get("access:scope"))).get("value").equals("private")){
 			subscriptionId = "Sorry, entity not available";
+			LOGGER.info("Client tried to access private entity: "+subscription.getId());
 		}
 		
 		
