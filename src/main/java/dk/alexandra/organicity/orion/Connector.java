@@ -50,9 +50,21 @@ public class Connector {
     private String serverUrl;
 
     
-    
-    
-    
+    /*
+    public static void main(String[] args){
+    	Connector c = new Connector();
+    	String[] attr = new String[1];
+    	attr[0] = "temperature";
+    	String[] cond = new String[1];
+    	cond[0] = "pressure";
+		String entityId = "urn:oc:entity:experimenters:cf2c1723-3369-4123-8b32-49abe71c0e57:5846db253be86fb0409329e8:11";
+    	OrionSubscription subscription = new OrionSubscription(cond, attr, "P1D", entityId, false, "Room",null);
+    	
+    	
+    	String res = c.registerSubscription(subscription, "XXX");
+    	System.out.println(res);
+    }
+    */
     /**
 	 * Initiates the connection to the Context Broker
 	 * 
@@ -64,7 +76,7 @@ public class Connector {
         
         serverUrl = "http://192.168.121.132:1026";
         String token = "";
-        localURI = "http://192.168.121.1:8080/receiveNotifications";
+        localURI = "http://192.168.121.1:8090/receiveNotifications";
         try{
         	properties = new Properties();
             properties.load(Thread.currentThread().getContextClassLoader().getResourceAsStream("connection.properties"));
@@ -76,9 +88,9 @@ public class Connector {
         	LOGGER.error("not able to use properties. Continuing with default values");
         	
         }
-        LOGGER.error("Connecting to url: "+serverUrl);
-        client = new OrionClient(serverUrl,token, "organicity", "/");
         
+        LOGGER.info("Connecting to url: "+serverUrl);
+        client = new OrionClient(serverUrl,token, "organicity", "/");
         
 	}
 	
