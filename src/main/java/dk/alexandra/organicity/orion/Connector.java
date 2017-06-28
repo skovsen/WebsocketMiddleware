@@ -1,31 +1,44 @@
 package dk.alexandra.organicity.orion;
 
+
 import java.io.IOException;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.X509Certificate;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
 import java.util.TimeZone;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
+import javax.ws.rs.client.Entity;
 import javax.ws.rs.client.Invocation;
 import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.Form;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import org.apache.log4j.Logger;
-import org.glassfish.jersey.client.ClientConfig;
-import org.glassfish.jersey.filter.LoggingFilter;
 import org.json.JSONObject;
 
 import com.amaxilatis.orion.OrionClient;
 import com.amaxilatis.orion.model.subscribe.OrionEntity;
 import com.amaxilatis.orion.model.subscribe.SubscriptionResponse;
 
+import dk.alexandra.organicity.config.JwtParser;
 import dk.alexandra.orion.websocket.transports.OrionSubscription;
+import io.jsonwebtoken.Claims;
 
 
 
@@ -48,23 +61,19 @@ public class Connector {
     private HashMap<String, OrionSubscription> subscriptions = new HashMap<>();
     private HashMap<String, ArrayList<String>> clientIndexedSubscriptions = new HashMap<>();
     private String serverUrl;
+    private String tokenUrl = null;
+    private String token = null;
+    private String wsClientId;
+    private String wsClientSecret;
+    private int delay = 0;
 
     
-    /*
+    
     public static void main(String[] args){
     	Connector c = new Connector();
-    	String[] attr = new String[1];
-    	attr[0] = "temperature";
-    	String[] cond = new String[1];
-    	cond[0] = "pressure";
-		String entityId = "urn:oc:entity:experimenters:cf2c1723-3369-4123-8b32-49abe71c0e57:5846db253be86fb0409329e8:11";
-    	OrionSubscription subscription = new OrionSubscription(cond, attr, "P1D", entityId, false, "Room",null);
     	
-    	
-    	String res = c.registerSubscription(subscription, "XXX");
-    	System.out.println(res);
     }
-    */
+    
     /**
 	 * Initiates the connection to the Context Broker
 	 * 
@@ -75,23 +84,87 @@ public class Connector {
         df.setTimeZone(tz);
         
         serverUrl = "http://192.168.121.132:1026";
-        String token = "";
         localURI = "http://192.168.121.1:8090/receiveNotifications";
+        
         try{
         	properties = new Properties();
             properties.load(Thread.currentThread().getContextClassLoader().getResourceAsStream("connection.properties"));
-            serverUrl = properties.getProperty("serverUrl");
-            token = properties.getProperty("token");
+            //serverUrl = properties.getProperty("serverUrl");
+            
             localURI = properties.getProperty("localURI");
+            tokenUrl = properties.getProperty("tokenUrl");
+            wsClientId = properties.getProperty("clientId");
+            wsClientSecret = properties.getProperty("clientSecret");
         }catch(IOException e){
         	e.printStackTrace();
         	LOGGER.error("not able to use properties. Continuing with default values");
-        	
+        	System.exit(1);
         }
         
-        LOGGER.info("Connecting to url: "+serverUrl);
+        
+        token = getClientCredentialGrantToken(tokenUrl, wsClientId, wsClientSecret);
+        
+        LOGGER.info("Connecting to server url: "+serverUrl);
         client = new OrionClient(serverUrl,token, "organicity", "/");
         
+        ScheduledExecutorService executor = Executors.newScheduledThreadPool(1);
+        //continously update token when it expires
+        Runnable task = () -> {
+            token = getClientCredentialGrantToken(tokenUrl, wsClientId, wsClientSecret);
+            client = new OrionClient(serverUrl,token, "organicity", "/");
+            LOGGER.info("Updated token from OAuth2 server");
+        };
+
+        executor.scheduleWithFixedDelay(task, delay, delay, TimeUnit.SECONDS);
+
+	}
+	
+	private String getClientCredentialGrantToken(String tokenUrl, String clientId, String clientSecret) {
+		LOGGER.info("getting new token");
+		SSLContext sc = null;
+		try{
+			sc = SSLContext.getInstance("SSL"); 
+		    sc.init(null, getTrustManager(), new java.security.SecureRandom());
+		}catch(NoSuchAlgorithmException|KeyManagementException e){
+			LOGGER.error("Exception thrown while setting up certificats: \n"+e);
+			return null;
+		}
+		
+		
+		Client c = ClientBuilder.newBuilder().sslContext(sc).build();
+		
+		String path = "/realms/organicity/protocol/openid-connect/token";
+		WebTarget webTarget = c.target(tokenUrl).path(path);
+		LOGGER.info("Connecting to token Url: "+tokenUrl+path);
+		String base64 = Base64.getEncoder().encodeToString((clientId+":"+clientSecret).getBytes());
+		
+		
+		Invocation.Builder invocationBuilder = webTarget.request(MediaType.APPLICATION_JSON_TYPE).header("Authorization","Basic "+base64);
+		
+
+		Form form = new Form();		
+		form.param("grant_type", "client_credentials");
+		
+		Entity entity =  Entity.entity(form, MediaType.APPLICATION_FORM_URLENCODED_TYPE);
+		Response response = invocationBuilder.post(entity);
+		
+		JSONObject tokenEntity = new JSONObject(response.readEntity(String.class));
+		//check if middleware can be authenticated
+		String possibleError =tokenEntity.optString("error_description", null); 
+		if(possibleError!=null){
+			LOGGER.error("Not able to authentication middleware credentials");
+			LOGGER.error("Error: "+possibleError);
+			System.exit(1);	
+		}
+		
+		try{
+			String expires = tokenEntity.get("expires_in").toString();
+			delay = Integer.parseInt(expires);
+		}catch(NumberFormatException e){
+			delay = 200;
+		};
+		
+		return tokenEntity.get("access_token").toString();
 	}
 	
 	
@@ -99,65 +172,84 @@ public class Connector {
 	 * Registering a subscription at the Context Broker
 	 * 
 	 * @param subscription A POJO containing the subscription data needed to set a subscription
-	 * @param clientId The id of the client requesting the subscription
+	 * @param sessionId The id of the client requesting the subscription
 	 * 
 	 * @return The subscriptionId if successful, null otherwise
 	 */
-	public String registerSubscription(OrionSubscription subscription, String clientId){
+	public String[] registerSubscription(OrionSubscription subscription, String sessionId, String clientId){
+		LOGGER.info("REGISTER SUBSCRIPTION!!!");
 		String subscriptionId = null;
-		
+		String[] methodResponse = new String[2];
+		methodResponse[0] = "error";
 		//using clean java http client, as OrionClient is non functioning with simple get
-		Client c = ClientBuilder.newClient( new ClientConfig().register( LoggingFilter.class ) );
-		WebTarget webTarget = c.target(serverUrl).path("/v2/entities/"+subscription.getId());
-		
-		Invocation.Builder invocationBuilder =  webTarget.request(MediaType.APPLICATION_JSON).header("fiware-service", "organicity");
-		Response checkResponse = invocationBuilder.get();
-		
-		JSONObject entity = new JSONObject(checkResponse.readEntity(String.class));
-
-		if(entity.has("error")){
-			//entity does not exist
-			subscriptionId = "Sorry, entity not available"; 
-			LOGGER.info("Client tried to access unknown entity: "+subscription.getId());
-		}else if(entity.has("access:scope") && ((JSONObject)(entity.get("access:scope"))).has("value") && ((JSONObject)(entity.get("access:scope"))).get("value").equals("private")){
-			subscriptionId = "Sorry, entity not available";
-			LOGGER.info("Client tried to access private entity: "+subscription.getId());
+		//Client c = ClientBuilder.newClient( new ClientConfig().register( LoggingFilter.class ) );
+		SSLContext sc = null;
+		try{
+			sc = SSLContext.getInstance("SSL"); 
+		    sc.init(null, getTrustManager(), new java.security.SecureRandom());
+		}catch(NoSuchAlgorithmException|KeyManagementException e){
+			LOGGER.error("Exception thrown while setting up certificats: \n"+e);
+			return null;
 		}
 		
 		
-		if(subscriptionId!=null)
-			return subscriptionId;
+		Client c = ClientBuilder.newBuilder().sslContext(sc).build();
+		WebTarget webTarget = c.target(serverUrl).path("/v2/entities/"+subscription.getEntityId());
+		
+		Invocation.Builder invocationBuilder =  webTarget.request(MediaType.APPLICATION_JSON).header("Fiware-Service", " organicity");
+		Response checkResponse = invocationBuilder.get();
+		
+		JSONObject checkEntity = new JSONObject(checkResponse.readEntity(String.class));
 		
 		
-		OrionEntity entitty = new OrionEntity();
-		entitty.setId(subscription.getId());
-		entitty.setIsPattern(String.valueOf(subscription.isPattern()));
-		entitty.setType(subscription.getType());
+		if(checkEntity.has("error")){
+			//entity does not exist
+			subscriptionId = "Sorry, entity not available"; 
+			LOGGER.info("Client tried to access unknown entity: "+subscription.getEntityId());
+		}else if(checkEntity.has("access:scope") && ((JSONObject)(checkEntity.get("access:scope"))).has("value") && ((JSONObject)(checkEntity.get("access:scope"))).get("value").equals("private") && !subscription.getEntityId().contains(clientId)){
+			//entity is private and user does not have access
+			subscriptionId = "Sorry, entity not available";
+			LOGGER.info("Client tried to access private entity: "+subscription.getEntityId());
+		}
+		
+		
+		if(subscriptionId!=null){
+			methodResponse[1] = subscriptionId;
+			return methodResponse;
+		}
+			
+		
+		
+		OrionEntity entity = new OrionEntity();
+		entity.setId(subscription.getEntityId());
 		String[] attributes = subscription.getAttributes();
 		String[] conditions = subscription.getConditions();
-		String duration = subscription.getDuration();
+		
 		try{
-			SubscriptionResponse response = client.subscribeChange(entitty, attributes, localURI,conditions, duration);
+			subscriptionId = "Not able to subscribe at the moment. Please try again";
+			
+			SubscriptionResponse response = client.subscribeChange(entity, attributes, localURI,conditions);
 			if(response!=null){
 				subscriptionId = response.getSubscribeResponse().getSubscriptionId();
-				subscription.setSubscriberId(clientId);
+				subscription.setSubscriberId(sessionId);
 				subscriptions.put(subscriptionId, subscription);
-				if(clientIndexedSubscriptions.get(clientId)==null){
-					clientIndexedSubscriptions.put(clientId, new ArrayList<String>(Arrays.asList(subscriptionId)));
+				if(clientIndexedSubscriptions.get(sessionId)==null){
+					clientIndexedSubscriptions.put(sessionId, new ArrayList<String>(Arrays.asList(subscriptionId)));
 				}else{
-					List<String> subscriptions = clientIndexedSubscriptions.get(clientId);
+					List<String> subscriptions = clientIndexedSubscriptions.get(sessionId);
 					if(!subscriptions.contains(subscriptions)){
 						subscriptions.add(subscriptionId);
 					}
 				}
+				methodResponse[0] = "subscriptionId";
 			}
-			subscriptionId = "Not able to subscribe at the moment. Please try again";
+			
 		}catch(IOException e){
 			LOGGER.error("Not able to add subscription: "+e.getStackTrace());
 			subscriptionId = "Something went wrong when trying to subscribe. Please try again";
 		}
-		
-		return subscriptionId;
+		methodResponse[1] = subscriptionId;
+		return methodResponse;
 	}
 	
 	
@@ -246,5 +338,33 @@ public class Connector {
 		
 		return allGood;
 	}
+	
+	/**
+	 * Method for getting a trust manager for handling the SSL connections
+	 * This is a VERY bad solution as it accepts all certificates. But it is needed as OC atm runs with self signed certs...
+	 * 
+	 * 
+	 * @return A TrustManager array
+	 */
+	
+	private TrustManager[] getTrustManager(){
+		// Create a trust manager that does not validate certificate chains
+		TrustManager[] trustAllCerts = new TrustManager[] { 
+				new X509TrustManager() {     
+					public java.security.cert.X509Certificate[] getAcceptedIssuers() { 
+						return new X509Certificate[0];
+					} 
+					public void checkClientTrusted( 
+							java.security.cert.X509Certificate[] certs, String authType) {
+					} 
+					public void checkServerTrusted( 
+							java.security.cert.X509Certificate[] certs, String authType) {
+					}
+				} 
+		};
+		return trustAllCerts;	
+	}
+
+
 
 }
